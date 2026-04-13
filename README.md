@@ -83,3 +83,8 @@ Additional outputs:
 
 Sarah Rysanek
 PhD Dissertation
+
+modified workflow from following publication:
+
+Schottenfels, E.R., and Regalla, C.A., 2021, Bathymetric Signatures of Submarine Forearc Deformation: A Case Study in the Nankai Accretionary Prism: Geochemistry, Geophysics, Geosystems, v. 22, p. e2021GC010050, doi:10.1029/2021GC010050.
+
