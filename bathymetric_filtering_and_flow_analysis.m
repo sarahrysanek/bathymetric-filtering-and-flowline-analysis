@@ -140,25 +140,54 @@ xlim([0 10000])
 grid on
 legend('Mean power', '±1 std dev')
 
-%% High-pass filtering (FULL resolution, no overwriting)
+%% NOTE:
+% Large Gaussian kernels introduce edge artifacts near DEM boundaries.
+% To minimize boundary contamination:
+%   1. NaNs are temporarily filled during filtering
+%   2. Original NaN regions are restored afterward
+%   3. Edge regions within ~3 sigma of the boundary are masked
+% Flow routing is performed only on the preserved interior region.
 
-cutoffs = [500, 1000, 5000]; % meters
+%% High-pass filtering (FULL resolution)
+
+cutoffs = [7000, 3000, 500]; % meters
 
 filtered_DEMs = struct();
 
 for i = 1:length(cutoffs)
-    
+
     cutoff = cutoffs(i);
+
     sigma = cutoff / (2 * dx_full);
-    
-    lowpass = imgaussfilt(Z_full, sigma);
-    highpass = Z_full - lowpass;
-    
-    % Store results in struct with dynamic field name
+
+    % Temporary filled DEM for filtering
+    Z_filter = Z_full;
+    Z_filter(isnan(Z_filter)) = 0;
+
+    % Gaussian filter
+    lowpass = imgaussfilt(Z_filter, sigma, ...
+        'Padding', 'replicate');
+
+    % High-pass
+    highpass = Z_filter - lowpass;
+
+    % Restore original NaNs
+    highpass(isnan(Z_full)) = NaN;
+
+    % Remove edge-affected zone
+    buffer = ceil(3 * sigma);
+
+    highpass(1:buffer,:) = NaN;
+    highpass(end-buffer+1:end,:) = NaN;
+    highpass(:,1:buffer) = NaN;
+    highpass(:,end-buffer+1:end) = NaN;
+
+    % Store
     fieldname = sprintf('hp_%dm', cutoff);
     filtered_DEMs.(fieldname) = highpass;
-    
+
     fprintf('Created high-pass DEM: %s\n', fieldname);
+
 end
 
 %% Export filtered DEMs
@@ -166,14 +195,14 @@ end
 fields = fieldnames(filtered_DEMs);
 
 for i = 1:length(fields)
-    
+
     name = fields{i};
     Z_out = filtered_DEMs.(name);
-    
+
     filename = sprintf('filtered_dem_%s.tif', name);
-    
+
     geotiffwrite(filename, Z_out, R, 'CoordRefSysCode', 32616);
-    
+
     fprintf('Saved: %s\n', filename);
 end
 
@@ -192,9 +221,10 @@ for i = 1:length(fields)
     
     % Invert bathymetry
     DEM.Z = -DEM.Z;
+    DEM.Z(abs(DEM.Z) < 1e-10) = NaN;
     
     % Optional smoothing
-    DEM = filter(DEM, 'mean', [3 3]);
+    %DEM = filter(DEM, 'mean', [3 3]);
     
     FD = FLOWobj(DEM);
     A = flowacc(FD);
@@ -202,14 +232,51 @@ for i = 1:length(fields)
     % Store results
     flow_results.(name).DEM = DEM;
     flow_results.(name).A   = A;
- 
+
+    A_plot = A;
+    A_plot.Z(A_plot.Z <= 0) = NaN;
     
     % Plot
     figure
-    imageschs(DEM, log(A))
+    imageschs(DEM, log(A_plot))
     title(sprintf('Flow accumulation (%s)', name))
 end
 
+%% Preview stream networks before export
+
+% Minimum contributing area threshold
+area_threshold = 1e3;
+
+fields = fieldnames(flow_results);
+
+for i = 1:length(fields)
+
+    name = fields{i};
+
+    fprintf('Previewing flow network for %s...\n', name);
+
+    DEM = flow_results.(name).DEM;
+    A   = flow_results.(name).A;
+
+    % Extract stream network
+    S = STREAMobj(FLOWobj(DEM), A > area_threshold);
+
+    % Optional: keep largest connected component
+    %S = klargestconncomps(S, 1);
+
+    % Plot
+    figure
+
+    % Background DEM
+    imageschs(DEM)
+    hold on
+
+    % Overlay stream network
+    plot(S, 'b', 'LineWidth', 1)
+
+    title(sprintf('Flow Network Preview (%s)', name))
+
+end
 %% Export flow line networks (for QGIS)
 
 % Minimum contributing area threshold (tune this!)
@@ -228,13 +295,14 @@ for i = 1:length(fields)
     
     % Extract stream network
     S = STREAMobj(FLOWobj(DEM), A > area_threshold);
+    % S = klargestconncomps(S, 1); % keep largest connected network (optional)
     
     % Convert to map coordinates
-    S = klargestconncomps(S, 1); % keep largest connected network (optional)
+    GS = STREAMobj2shape(S, 'type', 'map');
     
     % Export to shapefile
-    shapename = sprintf('flow_lines_%s.shp', name);
-    shapewrite(S, shapename);
+    shapename = sprintf('flow_lines_1e5_%s.shp', name);
+    shapewrite(GS, shapename);
     
     fprintf('Saved flow lines: %s\n', shapename);
 end
